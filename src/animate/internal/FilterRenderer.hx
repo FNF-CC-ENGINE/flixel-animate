@@ -707,5 +707,12 @@ class CamPool extends FlxCamera implements IFlxPooled
 		pool.putUnsafe(this);
 	}
 
+	//#if (flixel > "6.1.2")
+	public function putWeak()
+    {
+        pool.put(this);
+    }
+	//#end
+
 	override function destroy() {}
 }
