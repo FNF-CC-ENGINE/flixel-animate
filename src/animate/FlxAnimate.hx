@@ -2,6 +2,7 @@ package animate;
 
 import animate.FlxAnimateController.FlxAnimateAnimation;
 import animate.FlxAnimateFrames.FlxAnimateSettings;
+import animate.internal.FilterRenderer;
 import animate.internal.Frame;
 import animate.internal.StageBG;
 import animate.internal.Timeline;
@@ -18,6 +19,7 @@ import flixel.system.FlxAssets.FlxGraphicAsset;
 import flixel.util.FlxDestroyUtil;
 import haxe.io.Path;
 import openfl.display.BitmapData;
+import openfl.geom.Matrix;
 
 using flixel.util.FlxColorTransformUtil;
 
@@ -208,28 +210,7 @@ class FlxAnimate extends FlxSprite
 			matrix.translate(-library.matrix.tx, -library.matrix.ty);
 		}
 
-		matrix.translate(-origin.x, -origin.y);
-		matrix.scale(scale.x, scale.y);
-
-		if (angle != 0)
-		{
-			updateTrig();
-			matrix.rotateWithTrig(_cosAngle, _sinAngle);
-		}
-
-		if (skew.x != 0 || skew.y != 0)
-		{
-			updateSkew();
-			matrix.concat(_skewMatrix);
-		}
-
-		getScreenPosition(_point, camera);
-		_point.x += origin.x - offset.x;
-		_point.y += origin.y - offset.y;
-		matrix.translate(_point.x, _point.y);
-
-		if (isPixelPerfectRender(camera))
-			preparePixelPerfectMatrix(matrix);
+		prepareDrawMatrix(matrix, camera);
 
 		if (renderStage)
 			drawStage(camera);
@@ -275,25 +256,7 @@ class FlxAnimate extends FlxSprite
 		final matrix = this._matrix; // TODO: Just use local?
 
 		frame.prepareMatrix(matrix, FlxFrameAngle.ANGLE_0, checkFlipX(), checkFlipY());
-		matrix.translate(-origin.x, -origin.y);
-		matrix.scale(scale.x, scale.y);
-		if (bakedRotationAngle <= 0)
-		{
-			updateTrig();
-			if (angle != 0)
-				matrix.rotateWithTrig(_cosAngle, _sinAngle);
-		}
-		if (skew.x != 0 || skew.y != 0)
-		{
-			updateSkew();
-			_matrix.concat(_skewMatrix);
-		}
-		getScreenPosition(_point, camera);
-		_point.x += origin.x - offset.x;
-		_point.y += origin.y - offset.y;
-		matrix.translate(_point.x, _point.y);
-		if (isPixelPerfectRender(camera))
-			preparePixelPerfectMatrix(matrix);
+		prepareDrawMatrix(matrix, camera);
 		camera.drawPixels(frame, framePixels, matrix, colorTransform, blend, antialiasing, shader);
 	}
 
@@ -301,6 +264,32 @@ class FlxAnimate extends FlxSprite
 	{
 		matrix.tx = Math.floor(matrix.tx);
 		matrix.ty = Math.floor(matrix.ty);
+	}
+
+	function prepareDrawMatrix(matrix:FlxMatrix, camera:FlxCamera):Void
+	{
+		matrix.translate(-origin.x, -origin.y);
+		matrix.scale(scale.x, scale.y);
+
+		if (angle != 0)
+		{
+			updateTrig();
+			matrix.rotateWithTrig(_cosAngle, _sinAngle);
+		}
+
+		if (skew.x != 0 || skew.y != 0)
+		{
+			updateSkew();
+			matrix.concat(_skewMatrix);
+		}
+
+		getScreenPosition(_point, camera);
+		_point.x += origin.x - offset.x;
+		_point.y += origin.y - offset.y;
+		matrix.translate(_point.x, _point.y);
+
+		if (isPixelPerfectRender(camera))
+			preparePixelPerfectMatrix(matrix);
 	}
 
 	var stageBg:StageBG;
@@ -332,6 +321,7 @@ class FlxAnimate extends FlxSprite
 		return v;
 	}
 
+	#if (flixel >= "5.4.0")
 	override function get_numFrames():Int
 	{
 		if (!isAnimate)
@@ -345,6 +335,7 @@ class FlxAnimate extends FlxSprite
 
 		return 0;
 	}
+	#end
 
 	private function set_anim(newController:FlxAnimateController):FlxAnimateController
 	{
@@ -372,27 +363,32 @@ class FlxAnimate extends FlxSprite
 			final bounds = timeline._bounds;
 			final flipX = checkFlipX();
 			final flipY = checkFlipY();
-			final mat = new FlxMatrix(flipX ? -1 : 1, 0, 0, flipY ? -1 : 1, flipX ? bounds.width : 0, flipY ? bounds.height : 0);
+			final mat = #if flash new Matrix() #else Matrix.__pool.get() #end;
 
 			#if flash
-			framePixels = animate.internal.FilterRenderer.getBitmap((cam, m) ->
+			framePixels = FilterRenderer.getBitmap((cam, m) ->
 			{
 				m.concat(mat);
 				timeline.draw(cam, m, null, NORMAL, true, null);
 			}, bounds, false);
 			#else
-			// TODO: optimize this to use FilterRenderer stuff
-			var resultMat = new FlxMatrix(1, 0, 0, 1, -bounds.x, -bounds.y);
-			resultMat.concat(mat);
-			mat.identity();
+			framePixels = FilterRenderer.renderToBitmap((camera:FlxCamera, matrix:FlxMatrix) ->
+			{
+				Frame.__isDirtyCall = false;
+				matrix.translate(-bounds.x, -bounds.y);
+				matrix.concat(mat);
 
-			var cam = new FlxCamera(0, 0, Math.ceil(bounds.width), Math.ceil(bounds.height));
-			timeline.draw(cam, resultMat, null, NORMAL, true, null);
-			cam.render();
+				camera.width = Math.ceil(bounds.width);
+				camera.height = Math.ceil(bounds.height);
 
-			framePixels = new BitmapData(Std.int(bounds.width), Std.int(bounds.height), true, 0);
-			framePixels.draw(cam.canvas, mat, null, null, null, true);
-			cam.canvas.graphics.clear();
+				timeline.currentFrame = animation.frameIndex;
+				timeline.draw(camera, matrix, null, NORMAL, true, null);
+				camera.render();
+
+				if (camera.canvas.graphics.__bounds != null)
+					camera.canvas.graphics.__bounds.setTo(0, 0, Math.ceil(bounds.width), Math.ceil(bounds.height));
+			});
+			Matrix.__pool.release(mat);
 			#end
 		}
 
@@ -400,22 +396,34 @@ class FlxAnimate extends FlxSprite
 		return framePixels;
 	}
 
-	override function getScreenBounds(?newRect:FlxRect, ?camera:FlxCamera):FlxRect
+	#if (flixel >= "5.0.0")
+	override function getScreenBounds(?rect:FlxRect, ?camera:FlxCamera):FlxRect
 	{
-		var bounds = super.getScreenBounds(newRect, camera);
+		if (rect == null)
+			rect = FlxRect.get();
+
+		if (camera == null)
+			camera = #if (flixel >= "5.7.0") getDefaultCamera() #else FlxG.camera #end;
+
+		rect.set(0.0, 0.0, frameWidth, frameHeight);
+
+		final matrix = this._matrix;
+		matrix.identity();
 
 		if (isAnimate)
 		{
-			final origin = getAnimateOrigin();
-			bounds.x += origin.x;
-			bounds.y += origin.y;
-			origin.put();
+			if (applyStageMatrix)
+			{
+				matrix.concat(library.matrix);
+				matrix.translate(-library.matrix.tx, -library.matrix.ty);
+			}
 		}
 
-		// TODO: add skewed bounds expansion
+		prepareDrawMatrix(matrix, camera);
 
-		return bounds;
+		return Timeline.applyMatrixToRect(rect, matrix);
 	}
+	#end
 
 	override function getScreenPosition(?result:FlxPoint, ?camera:FlxCamera):FlxPoint
 	{
@@ -449,7 +457,9 @@ class FlxAnimate extends FlxSprite
 	override function destroy():Void
 	{
 		super.destroy();
+		#if !flash
 		_renderTexture = FlxDestroyUtil.destroy(_renderTexture);
+		#end
 		anim = FlxDestroyUtil.destroy(anim);
 		library = null;
 		timeline = null;

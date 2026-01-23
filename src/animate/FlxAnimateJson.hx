@@ -25,7 +25,21 @@ extern typedef SpritemapJson =
 	ATLAS:
 	{
 		SPRITES:Array<SpriteJson>
-	}
+	},
+	meta:SpritemapMeta
+}
+
+extern typedef SpritemapMeta =
+{
+	app:String,
+	version:String,
+	image:String,
+	format:String,
+	size:
+	{
+		w:Int, h:Int
+	},
+	resolution:String
 }
 
 extern typedef SpriteJson =
@@ -359,7 +373,7 @@ abstract FilterJson(Dynamic)
 				return dsf;
 
 			case "glowFilter" | "GF":
-				var gf = new GlowFilter(FlxColor.fromString(C), A, BLX, BLY, STR, Q, IN, KK);
+				var gf = new GlowFilter(FlxColor.fromString(C), A, BLX, BLY, STR / 100, Q, IN, KK);
 				return gf;
 
 				// TODO: add missing filters support for other targets
